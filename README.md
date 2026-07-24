@@ -1,2 +1,0 @@
-# Orinko
-E-commerce website
