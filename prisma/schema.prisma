@@ -1,0 +1,520 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// USER MANAGEMENT & AUTHENTICATION
+// -----------------------------------------------------------------------------
+
+model User {
+  id        String  @id @default(uuid())
+  authId    String  @unique // Auth mapped to Supabase auth.users.id
+  email     String  @unique
+  firstName String?
+  lastName  String?
+  phone     String?
+  role      Role    @default(CUSTOMER)
+
+  // Relations
+  addresses     Address[]
+  orders        Order[]
+  cart          Cart?
+  wishlist      Wishlist?
+  reviews       Review[]
+  notifications Notification[]
+  returns       Return[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  STAFF
+  CUSTOMER
+}
+
+model Address {
+  id         String  @id @default(uuid())
+  userId     String
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String? // e.g., "Home", "Work"
+  firstName  String
+  lastName   String
+  phone      String?
+  street     String
+  city       String
+  state      String
+  postalCode String
+  country    String
+  isDefault  Boolean @default(false)
+
+  // Relations to orders that used this address
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// PRODUCT CATALOG & INVENTORY
+// -----------------------------------------------------------------------------
+
+model Product {
+  id            String   @id @default(uuid())
+  slug          String   @unique
+  name          String
+  description   String   @db.Text
+  details       String[] // Bullet points
+  basePrice     Decimal  @db.Decimal(10, 2)
+  originalPrice Decimal? @db.Decimal(10, 2)
+  isNew         Boolean  @default(false)
+  isActive      Boolean  @default(true) // Soft delete pattern
+
+  // Relations
+  images      ProductImage[]
+  variants    ProductVariant[]
+  categories  Category[]
+  collections Collection[]
+  reviews     Review[]
+  wishlists   Wishlist[]
+  heroSlides  HeroSlide[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model ProductVariant {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku       String   @unique
+  sizeId    String
+  size      Size     @relation(fields: [sizeId], references: [id])
+  colorId   String
+  color     Color    @relation(fields: [colorId], references: [id])
+  price     Decimal? @db.Decimal(10, 2) // Optional override
+
+  // Inventory
+  inventory Inventory?
+
+  // Order items tracking
+  orderItems OrderItem[]
+  cartItems  CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, sizeId, colorId])
+}
+
+model Size {
+  id       String           @id @default(uuid())
+  name     String           @unique // e.g., "S", "M", "L"
+  variants ProductVariant[]
+}
+
+model Color {
+  id       String           @id @default(uuid())
+  name     String // e.g., "Black"
+  hex      String // e.g., "#000000"
+  variants ProductVariant[]
+}
+
+model ProductImage {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String // Cloudinary secure URL
+  publicId  String // Cloudinary public_id for deletions
+  altText   String?
+  isPrimary Boolean @default(false)
+  order     Int     @default(0)
+
+  createdAt DateTime @default(now())
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  slug        String    @unique
+  name        String
+  description String?
+  imageUrl    String?
+  publicId    String?
+  products    Product[]
+}
+
+model Collection {
+  id          String    @id @default(uuid())
+  slug        String    @unique
+  name        String
+  description String?
+  image       String?
+  products    Product[]
+}
+
+model Inventory {
+  id                String         @id @default(uuid())
+  variantId         String         @unique
+  variant           ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  stock             Int            @default(0)
+  lowStockThreshold Int            @default(5)
+
+  updatedAt DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------------------
+// SHOPPING & ORDERS
+// -----------------------------------------------------------------------------
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String?    @unique // Nullable for guest carts
+  user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String?    @unique // Used for guest tracking
+  items     CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CartItem {
+  id        String         @id @default(uuid())
+  cartId    String
+  cart      Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  quantity  Int            @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, variantId])
+}
+
+model Wishlist {
+  id       String    @id @default(uuid())
+  userId   String    @unique
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Coupon {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  discountType  String // "PERCENTAGE", "FIXED"
+  discountValue Decimal  @db.Decimal(10, 2)
+  minOrderValue Decimal? @db.Decimal(10, 2)
+  maxDiscount   Decimal? @db.Decimal(10, 2)
+  startDate     DateTime
+  endDate       DateTime
+  isActive      Boolean  @default(true)
+  usageLimit    Int?
+  usageCount    Int      @default(0)
+
+  orders Order[]
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  orderNumber String      @unique
+  userId      String? // Nullable for guest checkout
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  status      OrderStatus @default(PENDING)
+
+  // Pricing
+  subtotal    Decimal @db.Decimal(10, 2)
+  tax         Decimal @db.Decimal(10, 2)
+  shippingFee Decimal @db.Decimal(10, 2)
+  discount    Decimal @default(0) @db.Decimal(10, 2)
+  total       Decimal @db.Decimal(10, 2)
+
+  // Relations
+  couponId          String?
+  coupon            Coupon?     @relation(fields: [couponId], references: [id])
+  shippingAddressId String
+  shippingAddress   Address     @relation(fields: [shippingAddressId], references: [id])
+  items             OrderItem[]
+  payment           Payment?
+  returns           Return[]
+  replacements      Return[]    @relation("ReplacementOrder")
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deliveredAt DateTime?
+  cancellationReason String?
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PACKED
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  RETURNED
+  REFUNDED
+}
+
+model OrderItem {
+  id           String          @id @default(uuid())
+  orderId      String
+  order        Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variantId    String? // Nullable if variant was deleted later
+  variant      ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  productName  String // Snapshot of name
+  productPrice Decimal         @db.Decimal(10, 2) // Snapshot of price
+  quantity     Int
+  customImage  String? // Cloudinary URL for customized prints
+  returns      Return[]
+
+  createdAt DateTime @default(now())
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  orderId           String        @unique
+  order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  razorpayOrderId   String        @unique
+  razorpayPaymentId String?       @unique
+  razorpaySignature String?
+  method            String // UPI, CARD, COD, etc.
+  status            PaymentStatus @default(PENDING)
+  amount            Decimal       @db.Decimal(10, 2)
+
+  refunds Refund[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+// -----------------------------------------------------------------------------
+// RETURNS, REFUNDS & REVIEWS
+// -----------------------------------------------------------------------------
+
+model Return {
+  id                 String       @id @default(uuid())
+  orderId            String
+  order              Order        @relation(fields: [orderId], references: [id])
+  userId             String
+  user               User         @relation(fields: [userId], references: [id])
+  orderItemId        String
+  orderItem          OrderItem    @relation(fields: [orderItemId], references: [id])
+  type               ReturnType   @default(REFUND)
+  reason             String       @db.Text
+  description        String?      @db.Text
+  images             String[]
+  status             ReturnStatus @default(PENDING)
+  replacementOrderId String?
+  replacementOrder   Order?       @relation("ReplacementOrder", fields: [replacementOrderId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ReturnType {
+  REFUND
+  REPLACEMENT
+}
+
+enum ReturnStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+model Refund {
+  id        String       @id @default(uuid())
+  paymentId String
+  payment   Payment      @relation(fields: [paymentId], references: [id])
+  amount    Decimal      @db.Decimal(10, 2)
+  reason    String?
+  status    RefundStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+model Review {
+  id              String  @id @default(uuid())
+  productId       String
+  product         Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating          Int // 1 to 5
+  title           String?
+  comment         String? @db.Text
+  isVerifiedBuyer Boolean @default(false)
+  helpfulVotes    Int     @default(0)
+
+  images ReviewImage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ReviewImage {
+  id       String @id @default(uuid())
+  reviewId String
+  review   Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  url      String // Cloudinary
+}
+
+// -----------------------------------------------------------------------------
+// CUSTOM PRINTING
+// -----------------------------------------------------------------------------
+
+model CustomPrintOrder {
+  id            String  @id @default(uuid())
+  userId        String?
+  status        String  @default("PENDING")
+  baseGarmentId String // References a Product ID
+  totalPrice    Decimal @db.Decimal(10, 2)
+
+  assets CustomPrintAsset[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CustomPrintAsset {
+  id            String           @id @default(uuid())
+  orderId       String
+  order         CustomPrintOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type          String // "IMAGE", "TEXT"
+  printLocation String // "FRONT", "BACK", "SLEEVE"
+
+  // Image properties
+  cloudinaryUrl String?
+
+  // Text properties
+  text       String?
+  fontFamily String?
+  colorHex   String?
+
+  // Transform
+  x        Float
+  y        Float
+  width    Float
+  height   Float
+  rotation Float
+  scale    Float
+
+  createdAt DateTime @default(now())
+}
+
+// -----------------------------------------------------------------------------
+// PLATFORM & MARKETING
+// -----------------------------------------------------------------------------
+
+model Notification {
+  id      String  @id @default(uuid())
+  userId  String
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title   String
+  message String  @db.Text
+  isRead  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+model AdminNotification {
+  id         String   @id @default(uuid())
+  type       String   // "ORDER", "RETURN", "REVIEW", "STOCK"
+  entityId   String   // e.g., Order ID, Return ID, Product ID
+  title      String
+  message    String?
+  link       String
+  isResolved Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  resolvedAt DateTime?
+}
+
+model NewsletterSubscriber {
+  id       String  @id @default(uuid())
+  email    String  @unique
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+}
+
+model Blog {
+  id          String  @id @default(uuid())
+  slug        String  @unique
+  title       String
+  content     String  @db.Text
+  coverImage  String?
+  author      String
+  isPublished Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Banner {
+  id       String  @id @default(uuid())
+  title    String
+  imageUrl String
+  linkUrl  String?
+  isActive Boolean @default(true)
+  order    Int     @default(0)
+}
+
+model HeroSlide {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  desktopImage String  @default("")
+  mobileImage  String  @default("")
+  badge        String?
+  heading      String  @default("")
+  description  String? @db.Text
+
+  isActive Boolean @default(true)
+  order    Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model HomepageSection {
+  id           String  @id @default(uuid())
+  title        String
+  type         String // "FEATURED", "TRENDING", "NEW_ARRIVALS", "CATEGORIES"
+  layout       String  @default("grid") // "grid", "carousel"
+  productLimit Int     @default(4)
+  isActive     Boolean @default(true)
+  order        Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Setting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String @db.Text
+}
